@@ -1,15 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <!-- Google tag (gtag.js) -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-EXK3V4126M"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
-  
-    gtag('config', 'G-EXK3V4126M');
-  </script>
   <meta charset="UTF-8" />
   <title>Beethoven Pomodoro</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -420,9 +411,6 @@
           <span>Volume</span>
           <input id="volume" type="range" min="0" max="1" step="0.05" value="0.4" />
         </div>
-        <div style="font-size:0.76rem; color:var(--text-muted);">
-          Beethoven in continuous rotation while the timer runs.
-        </div>
       </div>
     </div>
 
@@ -451,52 +439,55 @@
       "beethoven1.mp3",
       "beethoven2.mp3",
       "beethoven3.mp3",
-      "beethoven4.mp3",
-      "beethoven5.mp3"
+      "beethoven4.mp3"
     ];
-
+  
     let currentTrack = 0;
     let audio = new Audio(tracks[currentTrack]);
     audio.volume = 0.4;
-
+  
     audio.addEventListener("ended", () => {
+      // loop solo durante il focus (ma l'audio parte solo se siamo in focus)
       currentTrack = (currentTrack + 1) % tracks.length;
       audio.src = tracks[currentTrack];
       audio.currentTime = 0;
       audio.play().catch(() => {});
     });
-
+  
     // === DOM ELEMENTS ===
     const timeEl = document.getElementById("time");
     const timerLabelEl = document.getElementById("timerLabel");
     const statusTextEl = document.getElementById("statusText");
     const durationMetaEl = document.getElementById("durationMeta");
     const timerRingEl = document.getElementById("timerRing");
-
+  
     const startPauseBtn = document.getElementById("startPauseBtn");
     const resetBtn = document.getElementById("resetBtn");
     const focusModeBtn = document.getElementById("focusModeBtn");
     const breakModeBtn = document.getElementById("breakModeBtn");
-
+  
     const focusMinutesInput = document.getElementById("focusMinutes");
     const breakMinutesInput = document.getElementById("breakMinutes");
     const volumeSlider = document.getElementById("volume");
-
+  
     const studiedValueEl = document.getElementById("studiedValue");
-
+  
     // === TIMER STATE ===
     const MODE_FOCUS = "focus";
     const MODE_BREAK = "break";
-
+  
     let mode = MODE_FOCUS;
     let remainingSeconds = 25 * 60;
     let timerSeconds = 25 * 60;
     let intervalId = null;
     let running = false;
-
-    // conteggio totale focus (secondi)
+  
+    // conteggio totale focus (in secondi)
     let totalFocusSeconds = 0;
-
+  
+    // per correggere il throttling di Safari / background tab
+    let lastTickTime = null;
+  
     function formatTime(s) {
       const m = Math.floor(s / 60);
       const sec = s % 60;
@@ -504,7 +495,7 @@
         String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0")
       );
     }
-
+  
     function formatStudiedTime(seconds) {
       const minutes = Math.floor(seconds / 60);
       if (minutes < 60) {
@@ -515,41 +506,58 @@
       if (m === 0) return `${h} h`;
       return `${h} h ${m} min`;
     }
-
+  
     function updateStudiedDisplay() {
       studiedValueEl.textContent = formatStudiedTime(totalFocusSeconds);
     }
-
+  
     function updateProgressRing() {
       const fraction = 1 - remainingSeconds / timerSeconds;
       const percent = Math.max(0, Math.min(1, fraction)) * 100;
       timerRingEl.style.setProperty("--progress", percent + "%");
     }
-
+  
     function syncDurationFromInputs() {
-      const focusMin = Math.max(5, Math.min(120, Number(focusMinutesInput.value) || 25));
-      const breakMin = Math.max(1, Math.min(60, Number(breakMinutesInput.value) || 5));
-
+      const focusMin = Math.max(
+        5,
+        Math.min(120, Number(focusMinutesInput.value) || 25)
+      );
+      const breakMin = Math.max(
+        1,
+        Math.min(60, Number(breakMinutesInput.value) || 5)
+      );
+  
       if (mode === MODE_FOCUS) {
         timerSeconds = focusMin * 60;
       } else {
         timerSeconds = breakMin * 60;
       }
+  
       remainingSeconds = timerSeconds;
       timeEl.textContent = formatTime(remainingSeconds);
       durationMetaEl.textContent = (timerSeconds / 60) + " min";
       updateProgressRing();
     }
-
+  
+    function stopAndResetAudio() {
+      audio.pause();
+      audio.currentTime = 0;
+      currentTrack = 0;
+      audio.src = tracks[currentTrack];
+    }
+  
     function setMode(newMode) {
       if (mode === newMode) return;
-
+  
       mode = newMode;
       running = false;
       clearInterval(intervalId);
       intervalId = null;
-      audio.pause();
-
+      lastTickTime = null;
+  
+      // ogni cambio modalità: musica spenta e riportata all'inizio
+      stopAndResetAudio();
+  
       if (mode === MODE_FOCUS) {
         timerLabelEl.textContent = "FOCUS SESSION";
         focusModeBtn.classList.add("active");
@@ -559,70 +567,88 @@
         breakModeBtn.classList.add("active");
         focusModeBtn.classList.remove("active");
       }
-
+  
       statusTextEl.textContent = "Ready";
       syncDurationFromInputs();
       startPauseBtn.textContent = "▶ Start";
     }
-
+  
+    // tick basato sul tempo reale, non sul numero di chiamate
+    function tickRealTime() {
+      if (!running || lastTickTime === null) return;
+  
+      const now = Date.now();
+      let deltaSec = Math.floor((now - lastTickTime) / 1000);
+  
+      if (deltaSec <= 0) return;
+  
+      lastTickTime += deltaSec * 1000;
+  
+      remainingSeconds -= deltaSec;
+  
+      // se andiamo sotto zero, aggiusta delta usato per il conteggio studio
+      if (remainingSeconds < 0) {
+        deltaSec += remainingSeconds; // remainingSeconds è negativo
+        remainingSeconds = 0;
+      }
+  
+      if (mode === MODE_FOCUS && deltaSec > 0) {
+        totalFocusSeconds += deltaSec;
+        updateStudiedDisplay();
+      }
+  
+      timeEl.textContent = formatTime(remainingSeconds);
+      updateProgressRing();
+  
+      if (remainingSeconds <= 0) {
+        clearInterval(intervalId);
+        intervalId = null;
+        running = false;
+        statusTextEl.textContent = "Done";
+        startPauseBtn.textContent = "▶ Start";
+        stopAndResetAudio();
+      }
+    }
+  
     function startTimer() {
       if (running) return;
       running = true;
       statusTextEl.textContent = "Running";
       startPauseBtn.textContent = "⏸ Pause";
-
-      audio.play().catch(() => {});
-
-      intervalId = setInterval(() => {
-        remainingSeconds--;
-        if (remainingSeconds < 0) remainingSeconds = 0;
-
-        // conteggio minuti studiati solo in focus
-        if (mode === MODE_FOCUS) {
-          totalFocusSeconds++;
-          updateStudiedDisplay();
-        }
-
-        timeEl.textContent = formatTime(remainingSeconds);
-        updateProgressRing();
-
-        if (remainingSeconds <= 0) {
-          clearInterval(intervalId);
-          intervalId = null;
-          running = false;
-          statusTextEl.textContent = "Done";
-          startPauseBtn.textContent = "▶ Start";
-          audio.pause();
-          audio.currentTime = 0;
-          currentTrack = 0;
-          audio.src = tracks[currentTrack];
-        }
-      }, 1000);
+  
+      // musica solo in focus
+      if (mode === MODE_FOCUS) {
+        audio.play().catch(() => {});
+      }
+  
+      lastTickTime = Date.now();
+      intervalId = setInterval(tickRealTime, 250);
     }
-
+  
     function pauseTimer() {
       if (!running) return;
       running = false;
       clearInterval(intervalId);
       intervalId = null;
+      lastTickTime = null;
       startPauseBtn.textContent = "▶ Start";
       statusTextEl.textContent = "Paused";
-      audio.pause();
+      audio.pause(); // non resetta il brano, solo pausa
     }
-
+  
     function resetTimer() {
       running = false;
       clearInterval(intervalId);
       intervalId = null;
-      audio.pause();
-      audio.currentTime = 0;
-      currentTrack = 0;
-      audio.src = tracks[currentTrack];
+      lastTickTime = null;
+  
+      stopAndResetAudio();
+  
       statusTextEl.textContent = "Ready";
       startPauseBtn.textContent = "▶ Start";
       syncDurationFromInputs();
     }
-
+  
     // === EVENT LISTENERS ===
     startPauseBtn.addEventListener("click", () => {
       if (!running) {
@@ -631,36 +657,43 @@
         pauseTimer();
       }
     });
-
+  
     resetBtn.addEventListener("click", resetTimer);
-
+  
     focusModeBtn.addEventListener("click", () => {
       if (!running) setMode(MODE_FOCUS);
     });
-
+  
     breakModeBtn.addEventListener("click", () => {
       if (!running) setMode(MODE_BREAK);
     });
-
+  
     focusMinutesInput.addEventListener("change", () => {
       if (!running && mode === MODE_FOCUS) {
         syncDurationFromInputs();
       }
     });
-
+  
     breakMinutesInput.addEventListener("change", () => {
       if (!running && mode === MODE_BREAK) {
         syncDurationFromInputs();
       }
     });
-
+  
     volumeSlider.addEventListener("input", () => {
       audio.volume = parseFloat(volumeSlider.value);
     });
-
+  
+    // quando torni in foreground, riallinea subito usando il tempo reale
+    document.addEventListener("visibilitychange", () => {
+      if (!running) return;
+      tickRealTime();
+    });
+  
     // Init
     syncDurationFromInputs();
     updateStudiedDisplay();
   </script>
+  
 </body>
 </html>
